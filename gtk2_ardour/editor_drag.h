@@ -140,6 +140,9 @@ public:
 	/** return drag-motion displays video-frame of drag-location */
 	bool preview_video () const;
 
+	bool dragging_lollipop () const;
+	std::list<Drag*> const & drags() const { return _drags; }
+
 private:
 	EditingContext* _editing_context;
 	std::list<Drag*> _drags;
@@ -161,9 +164,8 @@ public:
 		_drags = m;
 	}
 
-	void set_bounding_item (ArdourCanvas::Item const * i) {
-		_bounding_item = i;
-	}
+	ArdourCanvas::Item const * bounding_item() const { return _bounding_item; }
+	void set_bounding_item (ArdourCanvas::Item const * i);
 
 	/** @return the canvas item being dragged */
 	ArdourCanvas::Item* item () const {

@@ -44,6 +44,7 @@
 
 #include "ardour_ui.h"
 #include "chord_box.h"
+#include "control_point.h"
 #include "cross_cursor.h"
 #include "editing_convert.h"
 #include "editor_cursors.h"
@@ -833,7 +834,7 @@ Pianoroll::canvas_allocate (Gtk::Allocation alloc)
 	if (!xcursor) {
 		xcursor = new CrossCursor (_canvas.root());
 		xcursor->set_line_width (5);
-		xcursor->set_outline_color (0xffffffcd);
+		xcursor->set_outline_color (UIConfiguration::instance().color_mod ("verbose canvas cursor", "verbose canvas cursor"));
 		xcursor->hide (); /* for now, it will become visible on first motion */
 	}
 
@@ -1059,7 +1060,20 @@ Pianoroll::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, It
 
 	case ControlPointItem:
 		if (mouse_mode == Editing::MouseContent) {
-			_drags->set (new ControlPointDrag (*this, item), event);
+			ControlPointDrag* cpd = new ControlPointDrag (*this, item);
+
+			ControlPoint* cp = reinterpret_cast<ControlPoint*> (item->get_data ("control_point"));
+			if (cp) {
+				AutomationLine& line (cp->line());
+				Evoral::Parameter line_param (line.the_list()->parameter());
+				for (auto & [param,lane] : automation_lanes) {
+					if (param == line_param) {
+						cpd->set_bounding_item (lane->group);
+						break;
+					}
+				}
+			}
+			_drags->set (cpd, event);
 		}
 		return true;
 		break;
@@ -1110,12 +1124,19 @@ Pianoroll::button_press_handler_1 (ArdourCanvas::Item* item, GdkEvent* event, It
 	case EditorAutomationLineItem: {
 		ARDOUR::SelectionOperation op = ArdourKeyboard::selection_type (event->button.state);
 		select_automation_line (&event->button, item, op);
-		switch (mouse_mode) {
-		case Editing::MouseContent:
-			_drags->set (new LineDrag (*this, item, [&](GdkEvent* ev,timepos_t const & pos, double) { _active_view->line_drag_click (ev, pos); }), event);
-			break;
-		default:
-			break;
+		if (mouse_mode == Editing::MouseContent) {
+			LineDrag* ld = new LineDrag (*this, item, [&](GdkEvent* ev,timepos_t const & pos, double) { _active_view->line_drag_click (ev, pos); });
+			AutomationLine* line = reinterpret_cast<AutomationLine*> (item->get_data ("line"));
+			if (line) {
+				Evoral::Parameter line_param (line->the_list()->parameter());
+				for (auto & [param,lane] : automation_lanes) {
+					if (param == line_param) {
+						ld->set_bounding_item (lane->group);
+						break;
+					}
+				}
+			}
+			_drags->set (ld, event);
 		}
 		return true;
 	}
@@ -1297,22 +1318,13 @@ Pianoroll::motion_track (ArdourCanvas::Duple const & pos)
 	assert (xcursor);
 
 	if (!_drags->active()) {
-		switch (_editing_policy) {
-		case ActiveView:
-			if (_active_view && _active_view->entered_note()) {
-				xcursor->hide ();
-				return;
-			}
-			break;
-		case AllViews:
-			for (auto & [region,view] : region_view_map) {
-				if (view->entered_note()) {
-					xcursor->hide ();
-					return;
-				}
-			}
-			break;
-		}
+		xcursor->hide ();
+		return;
+	}
+
+	if (_drags->dragging_lollipop()) {
+		xcursor->hide ();
+		return;
 	}
 
 	auto res = automation_lanes.find (MidiVelocityAutomation);
@@ -1337,7 +1349,19 @@ Pianoroll::motion_track (ArdourCanvas::Duple const & pos)
 	   specifically this transformation, for various reasons.
 	*/
 
-	xcursor->set_position (ArdourCanvas::Duple (pos.x, pos.y).translate (-hv_scroll_group->scroll_offset()));
+	ArdourCanvas::Duple xc (ArdourCanvas::Duple (pos.x, pos.y).translate (-hv_scroll_group->scroll_offset()));
+
+	ArdourCanvas::Item const * bounds = _drags->drags().front()->bounding_item();
+
+	if (bounds) {
+		ArdourCanvas::Rect rect (bounds->item_to_window (bounds->bounding_box()));
+		xc.x = std::max (xc.x, rect.x0);
+		xc.x = std::min (xc.x, rect.x1);
+		xc.y = std::max (xc.y, rect.y0);
+		xc.y = std::min (xc.y, rect.y1);
+	}
+
+	xcursor->set_position (xc);
 }
 
 bool
